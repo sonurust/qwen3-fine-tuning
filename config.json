@@ -1,0 +1,51 @@
+{
+  "model": {
+    "name": "Qwen3-235B-A22B-Thinking-2507",
+    "provider": "openrouter",
+    "base_model": "qwen/qwen-2.5-72b-instruct",
+    "fine_tuning_params": {
+      "learning_rate": 2e-5,
+      "num_train_epochs": 3,
+      "per_device_train_batch_size": 4,
+      "per_device_eval_batch_size": 4,
+      "warmup_steps": 100,
+      "weight_decay": 0.01,
+      "logging_steps": 10,
+      "save_steps": 500,
+      "evaluation_strategy": "steps",
+      "eval_steps": 100,
+      "save_total_limit": 3,
+      "load_best_model_at_end": true,
+      "metric_for_best_model": "eval_loss",
+      "greater_is_better": false
+    }
+  },
+  "tools": {
+    "enabled": true,
+    "max_tools_per_request": 5,
+    "timeout_seconds": 30,
+    "retry_attempts": 3
+  },
+  "training": {
+    "dataset_path": "training_data.jsonl",
+    "validation_split": 0.1,
+    "test_split": 0.1,
+    "max_sequence_length": 4096,
+    "pad_to_max_length": false,
+    "use_cache": true
+  },
+  "openrouter": {
+    "api_endpoint": "https://openrouter.ai/api/v1",
+    "max_retries": 3,
+    "timeout": 60,
+    "rate_limit": {
+      "requests_per_minute": 60,
+      "tokens_per_minute": 90000
+    }
+  },
+  "output": {
+    "model_output_dir": "./model/fine_tuned",
+    "logs_dir": "./logs",
+    "checkpoints_dir": "./checkpoints"
+  }
+}

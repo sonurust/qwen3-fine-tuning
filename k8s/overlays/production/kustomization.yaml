@@ -1,0 +1,38 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: qwen3-mcp-prod
+
+resources:
+- ../../base
+- namespace.yaml
+
+patchesStrategicMerge:
+- replica-patch.yaml
+- resource-patch.yaml
+
+configMapGenerator:
+- name: qwen3-mcp-config
+  behavior: merge
+  literals:
+  - LOG_LEVEL=ERROR
+  - ENVIRONMENT=production
+
+secretGenerator:
+- name: qwen3-mcp-secrets
+  behavior: replace
+  files:
+  - openrouter-api-key=openrouter-api-key.txt
+  - redis-url=redis-url.txt
+
+images:
+- name: qwen3-mcp-server
+  newTag: v1.0.0
+- name: qwen3-desktop-commander
+  newTag: v1.0.0
+
+replicas:
+- name: qwen3-mcp-server
+  count: 5
+- name: qwen3-nginx
+  count: 3

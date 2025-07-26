@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qwen3-mcp-server
+  labels:
+    app: qwen3-mcp
+    component: server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: qwen3-mcp
+      component: server
+  template:
+    metadata:
+      labels:
+        app: qwen3-mcp
+        component: server
+    spec:
+      containers:
+      - name: mcp-server
+        image: qwen3-mcp-server:latest
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: OPENROUTER_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: qwen3-mcp-secrets
+              key: openrouter-api-key
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: MCP_VERSION
+          value: "2025-06-18"
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: qwen3-mcp-secrets
+              key: redis-url
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/config.json
+          subPath: config.json
+        - name: logs-volume
+          mountPath: /app/logs
+        livenessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+      volumes:
+      - name: config-volume
+        configMap:
+          name: qwen3-mcp-config
+      - name: logs-volume
+        emptyDir: {}
+      restartPolicy: Always

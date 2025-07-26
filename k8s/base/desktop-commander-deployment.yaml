@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qwen3-desktop-commander
+  labels:
+    app: qwen3-mcp
+    component: desktop-commander
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: qwen3-mcp
+      component: desktop-commander
+  template:
+    metadata:
+      labels:
+        app: qwen3-mcp
+        component: desktop-commander
+    spec:
+      containers:
+      - name: desktop-commander
+        image: qwen3-desktop-commander:latest
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: MCP_CLIENT_DOCKER
+          value: "true"
+        volumeMounts:
+        - name: workspace-volume
+          mountPath: /workspace
+        - name: logs-volume
+          mountPath: /logs
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - CHOWN
+            - SETUID
+            - SETGID
+      volumes:
+      - name: workspace-volume
+        emptyDir: {}
+      - name: logs-volume
+        emptyDir: {}
+      restartPolicy: Always

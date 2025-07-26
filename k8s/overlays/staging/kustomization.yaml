@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: qwen3-mcp-staging
+
+resources:
+- ../../base
+- namespace.yaml
+
+patchesStrategicMerge:
+- resource-patch.yaml
+
+configMapGenerator:
+- name: qwen3-mcp-config
+  behavior: merge
+  literals:
+  - LOG_LEVEL=DEBUG
+  - ENVIRONMENT=staging
+
+secretGenerator:
+- name: qwen3-mcp-secrets
+  behavior: replace
+  files:
+  - openrouter-api-key=openrouter-api-key.txt
+  - redis-url=redis-url.txt
+
+images:
+- name: qwen3-mcp-server
+  newTag: latest
+- name: qwen3-desktop-commander
+  newTag: latest
+
+replicas:
+- name: qwen3-mcp-server
+  count: 2
+- name: qwen3-nginx
+  count: 1

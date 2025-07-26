@@ -1,0 +1,249 @@
+name: Deploy to AWS EKS
+
+on:
+  push:
+    branches: [main, develop]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: us-west-2
+  CLUSTER_NAME: qwen3-mcp-cluster
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+
+    - name: Run tests
+      run: |
+        python test_tools_locally.py
+
+    - name: Lint code
+      run: |
+        pip install flake8
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: |
+          ${{ env.ECR_REGISTRY }}/qwen3-mcp-server
+          ${{ env.ECR_REGISTRY }}/qwen3-desktop-commander
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha,prefix=sha-
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build and push MCP Server
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: ${{ env.ECR_REGISTRY }}/qwen3-mcp-server:${{ github.sha }},${{ env.ECR_REGISTRY }}/qwen3-mcp-server:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build and push Desktop Commander
+      uses: docker/build-push-action@v5
+      with:
+        context: ./DesktopCommanderMCP
+        file: ./DesktopCommanderMCP/Dockerfile
+        push: true
+        tags: ${{ env.ECR_REGISTRY }}/qwen3-desktop-commander:${{ github.sha }},${{ env.ECR_REGISTRY }}/qwen3-desktop-commander:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  deploy-staging:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
+
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Install kustomize
+      run: |
+        curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+        sudo mv kustomize /usr/local/bin/
+
+    - name: Create secrets
+      run: |
+        echo "${{ secrets.OPENROUTER_API_KEY }}" > k8s/overlays/staging/openrouter-api-key.txt
+        echo "redis://redis-service:6379" > k8s/overlays/staging/redis-url.txt
+
+    - name: Update image tags
+      run: |
+        cd k8s/overlays/staging
+        kustomize edit set image qwen3-mcp-server=${{ env.ECR_REGISTRY }}/qwen3-mcp-server:${{ github.sha }}
+        kustomize edit set image qwen3-desktop-commander=${{ env.ECR_REGISTRY }}/qwen3-desktop-commander:${{ github.sha }}
+
+    - name: Deploy to staging
+      run: |
+        kubectl apply -k k8s/overlays/staging
+        kubectl rollout status deployment/qwen3-mcp-server -n qwen3-mcp-staging --timeout=300s
+
+    - name: Run smoke tests
+      run: |
+        # Wait for load balancer
+        sleep 60
+        LB_URL=$(kubectl get ingress qwen3-mcp-ingress -n qwen3-mcp-staging -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        
+        # Test health endpoint
+        curl -f http://$LB_URL/api/v1/health || exit 1
+        
+        # Test API info endpoint
+        curl -f http://$LB_URL/api/v1/info || exit 1
+
+  deploy-production:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
+
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Install kustomize
+      run: |
+        curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+        sudo mv kustomize /usr/local/bin/
+
+    - name: Create secrets
+      run: |
+        echo "${{ secrets.OPENROUTER_API_KEY }}" > k8s/overlays/production/openrouter-api-key.txt
+        echo "redis://redis-service:6379" > k8s/overlays/production/redis-url.txt
+
+    - name: Update image tags
+      run: |
+        cd k8s/overlays/production
+        kustomize edit set image qwen3-mcp-server=${{ env.ECR_REGISTRY }}/qwen3-mcp-server:${{ github.sha }}
+        kustomize edit set image qwen3-desktop-commander=${{ env.ECR_REGISTRY }}/qwen3-desktop-commander:${{ github.sha }}
+
+    - name: Deploy to production
+      run: |
+        kubectl apply -k k8s/overlays/production
+        kubectl rollout status deployment/qwen3-mcp-server -n qwen3-mcp-prod --timeout=600s
+
+    - name: Run production tests
+      run: |
+        # Wait for load balancer
+        sleep 60
+        LB_URL=$(kubectl get ingress qwen3-mcp-ingress -n qwen3-mcp-prod -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        
+        # Test health endpoint
+        curl -f http://$LB_URL/api/v1/health || exit 1
+        
+        # Test API functionality
+        curl -f -X POST http://$LB_URL/api/v1/messages \
+          -H "Content-Type: application/json" \
+          -d '{"messages": [{"role": "user", "content": {"type": "text", "text": "Health check test"}}]}' || exit 1
+
+    - name: Notify deployment success
+      if: success()
+      run: |
+        echo "🎉 Deployment to production successful!"
+        echo "🔗 Application URL: https://qwen3-mcp.yourdomain.com"
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'

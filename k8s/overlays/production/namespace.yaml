@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: qwen3-mcp-prod
+  labels:
+    name: qwen3-mcp-prod
+    environment: production

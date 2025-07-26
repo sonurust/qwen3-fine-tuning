@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen3-mcp-service
+  labels:
+    app: qwen3-mcp
+    component: server
+spec:
+  selector:
+    app: qwen3-mcp
+    component: server
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen3-nginx-service
+  labels:
+    app: qwen3-mcp
+    component: nginx
+spec:
+  selector:
+    app: qwen3-mcp
+    component: nginx
+  ports:
+  - port: 80
+    targetPort: 80
+    name: http
+  type: LoadBalancer
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  labels:
+    app: qwen3-mcp
+    component: redis
+spec:
+  selector:
+    app: qwen3-mcp
+    component: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+    name: redis
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: desktop-commander-service
+  labels:
+    app: qwen3-mcp
+    component: desktop-commander
+spec:
+  selector:
+    app: qwen3-mcp
+    component: desktop-commander
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: mcp
+  type: ClusterIP

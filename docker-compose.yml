@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  mcp-server:
+    build: .
+    # container_name removed to enable scaling
+    ports:
+      - "8080"
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MCP_VERSION=2025-06-18
+    volumes:
+      - ./training_data.jsonl:/app/training_data.jsonl:ro
+      - ./config.json:/app/config.json:ro
+      - ./prompt_template.txt:/app/prompt_template.txt:ro
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - mcp-network
+
+  # Optional: Nginx reverse proxy for production
+  nginx:
+    image: nginx:alpine
+    container_name: qwen3-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx-dynamic.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - mcp-server
+    networks:
+      - mcp-network
+    restart: unless-stopped
+
+  # Optional: Redis for caching and session management
+  redis:
+    image: redis:7-alpine
+    container_name: qwen3-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - mcp-network
+    restart: unless-stopped
+
+  # DesktopCommanderMCP integration
+  desktop-commander:
+    build:
+      context: ./DesktopCommanderMCP
+      dockerfile: Dockerfile
+    container_name: qwen3-desktop-commander
+    environment:
+      - NODE_ENV=production
+      - MCP_CLIENT_DOCKER=true
+    volumes:
+      # Mount workspace directory for file operations
+      - ./workspace:/workspace:rw
+      - ./logs:/logs
+    networks:
+      - mcp-network
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+
+networks:
+  mcp-network:
+    driver: bridge
+
+volumes:
+  redis-data:
